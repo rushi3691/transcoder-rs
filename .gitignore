@@ -1,0 +1,5 @@
+/target
+static
+*.mp4
+.env
+credentials.txt

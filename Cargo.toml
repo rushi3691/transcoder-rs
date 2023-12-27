@@ -1,0 +1,16 @@
+[package]
+name = "video_transcoder"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+aws-sdk-sqs = "1.9.0"
+aws-config = { version = "1.1.1", features = ["behavior-version-latest"] }
+dotenv = "0.15.0"
+ffmpeg-next = "6.1.0"
+tokio = {version = "1.35.1", features = ["full"]}
+serde_json = "1.0.108"
+serde = {version = "1.0", features = ["derive"]}
+
