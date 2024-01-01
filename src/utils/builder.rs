@@ -13,8 +13,10 @@ use super::StreamInfo;
 // -filter:v:2 scale=w=1280:h=720 -maxrate:v:2 900k -b:a:2 128k \
 // -var_stream_map "v:0,a:0,name:360p v:1,a:1,name:480p v:2,a:2,name:720p" \
 // -preset slow -hls_list_size 0 -threads 0 -f hls -hls_playlist_type event -hls_time 2 \
-// -hls_flags independent_segments -master_pl_name "name-pl.m3u8"
-// "static/encoded/name-%v.m3u8"
+// -hls_flags independent_segments
+// -hls_segment_filename "output_dir/%v/seg_%03d.ts"
+// -master_pl_name "master.m3u8"
+// "output_dir/%v/sub-pl.m3u8"
 
 // const HLS_TIME: u32 = 5;
 
@@ -28,14 +30,18 @@ pub fn get_highest_possible_res_idx(stream_info: &StreamInfo) -> usize {
         }
     }
 
-    println!("Max possible resolution: {}x{}", POSSIBLE_RESOLUTIONS[maximum_resolution_at_idx].0, POSSIBLE_RESOLUTIONS[maximum_resolution_at_idx].1);
+    println!(
+        "Max possible resolution: {}x{}",
+        POSSIBLE_RESOLUTIONS[maximum_resolution_at_idx].0,
+        POSSIBLE_RESOLUTIONS[maximum_resolution_at_idx].1
+    );
 
     return maximum_resolution_at_idx;
 }
 
 pub fn build_cmd(
     input_file: &str,
-    output_path_m3u8: &str,
+    output_dir: &str,
     stream_info: &StreamInfo,
     res_idx: usize,
 ) -> Vec<String> {
@@ -125,12 +131,19 @@ pub fn build_cmd(
     command.push("independent_segments".to_string());
 
     // add output path
+    // command.push("-master_pl_name".to_string());
+    // command.push("master.m3u8".to_string());
+
+    // add name%v.m3u8
+    // command.push(output_path_m3u8.to_string());
+
+    command.push("-hls_segment_filename".to_string());
+    command.push(output_dir.to_string() + "/%v/seg_%03d.ts");
+
     command.push("-master_pl_name".to_string());
     command.push("master.m3u8".to_string());
 
-    // add name%v.m3u8
-    command.push(output_path_m3u8.to_string());
-
+    command.push(output_dir.to_string() + "/%v/sub-pl.m3u8");
 
     return command;
 }
