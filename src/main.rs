@@ -8,7 +8,7 @@ use dotenv::dotenv;
 
 use mongo::models::Video;
 use mongodb::Collection;
-use utils::{builder, verify};
+use utils::{builder, verify, thumb_gen_builder};
 use aws_sdk_sqs as sqs;
 use mongo::helpers::update_video_status;
 
@@ -208,14 +208,28 @@ pub fn transcoder(
 
     println!("Stream info: {:?}", stream_info);
 
+
+    // multiple quality transcoding
     let res_idx = builder::get_highest_possible_res_idx(&stream_info);
 
-    let command = builder::build_cmd(
+    let command = builder::build_transcoder_cmd(
         &file_paths.input_file,
         &file_paths.output_dir,
         &stream_info,
         res_idx,
     );
+
+    // ! need to be called
+    builder::run_ffmpeg(command, ffmpeg_log);
+
+
+    // thumbnail generation
+    let command = thumb_gen_builder::build_thumb_cmd(
+        &file_paths.input_file,
+        &file_paths.output_dir,
+        &stream_info,
+    );
+
 
     // ! need to be called
     builder::run_ffmpeg(command, ffmpeg_log);

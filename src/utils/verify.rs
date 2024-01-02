@@ -17,6 +17,8 @@ pub fn check_streams(input_file: &str) -> Result<StreamInfo, Error> {
         height: 0,
         bitrate: 0,
         key_frames_interval: 0,
+        total_frames: 0.0,
+        duration: 0.0,
     };
     let input_video_stream = ictx.streams().best(media::Type::Video).unwrap_or_else(|| {
         eprintln!("Input file does not contain a video stream");
@@ -33,7 +35,7 @@ pub fn check_streams(input_file: &str) -> Result<StreamInfo, Error> {
     let width = input_video_stream.width();
     let height = input_video_stream.height();
     let bitrate = input_video_stream.bit_rate();
-    // let duration = ictx.duration() / ffmpeg::ffi::AV_TIME_BASE as i64; // in seconds
+    let duration = ictx.duration() / ffmpeg::ffi::AV_TIME_BASE as i64; // in seconds
     // key_frames_interval="$(echo `ffprobe ${source} 2>&1 | grep -oE '[[:digit:]]+(.[[:digit:]]+)? fps' | grep -oE '[[:digit:]]+(.[[:digit:]]+)?'`*2 | bc || echo '')"
     // key_frames_interval=${key_frames_interval:-50}
     // key_frames_interval=$(echo `printf "%.1f\n" $(bc -l <<<"$key_frames_interval/10")`*10 | bc) # round
@@ -44,12 +46,14 @@ pub fn check_streams(input_file: &str) -> Result<StreamInfo, Error> {
     let key_frames_interval = (key_frames_interval / 10) as f64 * 10.0;
     let key_frames_interval = key_frames_interval.round() as i32;
 
-    // let total_frames = duration as f64 * frame_rate;
+    let total_frames = duration as f64 * frame_rate;
 
     stream_info.key_frames_interval = key_frames_interval;
     stream_info.width = width;
     stream_info.height = height;
     stream_info.bitrate = bitrate;
+    stream_info.total_frames = total_frames;
+    stream_info.duration = duration as f64;
 
     return Ok(stream_info);
 }

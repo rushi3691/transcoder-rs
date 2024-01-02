@@ -1,5 +1,6 @@
 pub mod builder;
 pub mod verify;
+pub mod thumb_gen_builder;
 
 #[derive(Debug)]
 /// The `StreamInfo` struct contains information about a video stream, including whether it has video
@@ -31,4 +32,6 @@ pub struct StreamInfo {
     pub height: u32,
     pub bitrate: usize,
     pub key_frames_interval: i32,
+    pub total_frames: f64,
+    pub duration: f64,
 }

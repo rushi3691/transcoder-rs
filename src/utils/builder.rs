@@ -39,7 +39,7 @@ pub fn get_highest_possible_res_idx(stream_info: &StreamInfo) -> usize {
     return maximum_resolution_at_idx;
 }
 
-pub fn build_cmd(
+pub fn build_transcoder_cmd(
     input_file: &str,
     output_dir: &str,
     stream_info: &StreamInfo,
