@@ -1,4 +1,3 @@
-use crate::POSSIBLE_RESOLUTIONS;
 use super::StreamInfo;
 
 //     ffmpeg -i $input_file \

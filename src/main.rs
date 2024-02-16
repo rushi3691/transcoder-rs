@@ -131,7 +131,7 @@ pub fn generate_paths(key: &str) -> Result<FilePaths, Box<dyn std::error::Error>
     if path.exists() == false {
         return Err(Box::new(std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            "File not found",
+            std::fmt::format(format_args!("File not found: {:?}", path))
         )));
     }
 
