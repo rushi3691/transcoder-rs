@@ -12,7 +12,7 @@ use mongo::models::Video;
 use mongodb::Collection;
 use utils::{builder, verify, thumb_gen_builder, sprite};
 use aws_sdk_sqs as sqs;
-use mongo::helpers::update_video_status;
+use mongo::helpers::{set_video_duration, update_video_status};
 
 
 
@@ -319,9 +319,10 @@ pub async fn runner_r2(
         let file_paths = generate_paths(&job_root, key)?;
 
         update_video_status(video_collection, id, mongo::models::VideoStatus::PROCESSING).await?;
-        transcoder(&file_paths, ffmpeg_log)?;
+        let duration = transcoder(&file_paths, ffmpeg_log)?;
         r2.upload_dir(bucket, Path::new(&file_paths.output_dir), &format!("processed/{}", id))
             .await?;
+        set_video_duration(video_collection, id, duration).await?;
         update_video_status(video_collection, id, mongo::models::VideoStatus::READY).await?;
         Ok::<(), Box<dyn std::error::Error>>(())
     }
@@ -337,7 +338,7 @@ pub async fn runner_r2(
 pub fn transcoder(
     file_paths: &FilePaths,
     ffmpeg_log: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<f64, Box<dyn std::error::Error>> {
     let stream_info = verify::check_streams(&file_paths.input_file)?;
 
     println!("Stream info: {:?}", stream_info);
@@ -376,5 +377,6 @@ pub fn transcoder(
         )?;
     }
 
-    Ok(())
+    // seconds, saved on the video so the UI can show it
+    Ok(stream_info.duration)
 }

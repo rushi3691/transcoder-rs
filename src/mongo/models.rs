@@ -47,6 +47,9 @@ pub struct Video {
     pub deleted_at: Option<DateTime>,
     #[serde(rename = "userId", skip_serializing_if = "Option::is_none")]
     pub user_id: Option<ObjectId>,
+    /// seconds; set by the transcoder when a video becomes READY
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
 }
 
 
