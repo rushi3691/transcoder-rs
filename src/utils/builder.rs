@@ -148,36 +148,39 @@ pub fn build_transcoder_cmd(
     return command;
 }
 
-pub fn run_ffmpeg(command: Vec<String>, output_logs: bool) {
+pub fn run_ffmpeg(command: Vec<String>, output_logs: bool) -> Result<(), Box<dyn std::error::Error>> {
     println!("Running command: ffmpeg {:?}", command.join(" "));
 
-    if output_logs {
+    let status = if output_logs {
         let mut binding = Command::new("ffmpeg");
         let command = binding.args(&command);
         command.stdout(Stdio::piped());
 
-        let mut child = command.spawn().expect("failed to execute process");
+        let mut child = command.spawn()?;
 
         if let Some(ref mut stdout) = child.stdout {
             let reader = BufReader::new(stdout);
 
             for line in reader.lines() {
-                println!("{}", line.unwrap());
+                println!("{}", line?);
             }
         }
 
-        let res = child.wait();
-
-        match res {
-            Ok(status) => println!("Exited with status: {}", status.success()),
-            Err(err) => println!("Failed to wait for child: {}", err),
-        }
+        child.wait()?
     } else {
-        let output = Command::new("ffmpeg").args(&command).output();
-
-        match output {
-            Ok(output) => println!("Output: {:?}", output.status),
-            Err(err) => println!("Failed to wait for child: {}", err),
+        let output = Command::new("ffmpeg").args(&command).output()?;
+        if !output.status.success() {
+            // ffmpeg logs to stderr; the tail holds the actual error
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let tail: Vec<&str> = stderr.lines().rev().take(20).collect();
+            println!("ffmpeg stderr (last lines):\n{}", tail.into_iter().rev().collect::<Vec<_>>().join("\n"));
         }
+        output.status
+    };
+
+    println!("Exited with status: {}", status);
+    if !status.success() {
+        return Err(format!("ffmpeg failed: {}", status).into());
     }
+    Ok(())
 }

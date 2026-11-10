@@ -49,6 +49,24 @@ pub struct ParsedMessage {
     pub records: Vec<Record>,
 }
 
+/// Cloudflare R2 event notification body.
+/// https://developers.cloudflare.com/r2/buckets/event-notifications/#message-format
+#[derive(Debug, Deserialize)]
+pub struct R2Event {
+    pub action: String,
+    pub bucket: String,
+    pub object: R2Object,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct R2Object {
+    pub key: String,
+}
+
+pub fn parse_r2_event(body: serde_json::Value) -> Result<R2Event, Error> {
+    serde_json::from_value(body)
+}
+
 pub fn parse_msg(message: &str) -> Result<ParsedMessage, Error>{
     println!("message: {}", message);
     let parsed: ParsedMessage = serde_json::from_str(message)?;

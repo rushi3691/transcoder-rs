@@ -31,7 +31,7 @@ pub fn check_streams(input_file: &str) -> Result<StreamInfo, Error> {
         stream_info.has_audio = false;
     }
 
-    let input_video_stream = input_video_stream.codec().decoder().video().unwrap();
+    let input_video_stream = ffmpeg::codec::context::Context::from_parameters(input_video_stream.parameters())?.decoder().video()?;
     let width = input_video_stream.width();
     let height = input_video_stream.height();
     let bitrate = input_video_stream.bit_rate();

@@ -1,4 +1,6 @@
 
+mod amqp;
+mod cloudflare;
 mod mongo;
 mod msg_parser;
 mod utils;
@@ -25,15 +27,28 @@ const POSSIBLE_RESOLUTIONS: [(u32, u32, u32, u32); 6] = [
     (1920, 1080, 900, 192),
 ];
 
+// legacy AWS: S3 bucket mounted with s3fs
 const S3_MOUNT_POINT: &str = "/home/rushikesh/s3_drive";
-const OUTPUT_DIR: &str = "/home/rushikesh/s3_drive/processed";
 
 
+fn ffmpeg_log_enabled() -> bool {
+    std::env::var("FFMPEG_LOG")
+        .map(|s| s == "1")
+        .unwrap_or(false)
+}
+
+/// Local scratch space for downloads and transcoder output before upload to R2.
+fn work_dir() -> std::path::PathBuf {
+    std::env::var("WORK_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir().join("streamcraft"))
+}
+
+// legacy AWS: SQS consumer config
+#[allow(dead_code)]
 async fn load_env() -> (bool, aws_config::SdkConfig, String) {
     dotenv().expect("Failed to read .env file");
-    let ffmpeg_log = std::env::var("FFMPEG_LOG")
-        .map(|s| s == "1")
-        .unwrap_or(false);
+    let ffmpeg_log = ffmpeg_log_enabled();
 
     let config = aws_config::load_from_env().await;
     let queue_url = std::env::var("QUEUE_URL").expect("QUEUE_URL not set");
@@ -41,6 +56,8 @@ async fn load_env() -> (bool, aws_config::SdkConfig, String) {
     (ffmpeg_log, config, queue_url)
 }
 
+// legacy AWS: SQS consumer
+#[allow(dead_code)]
 async fn process_messages(
     sqs_client: &sqs::Client,
     queue_url: &str,
@@ -111,12 +128,90 @@ async fn process_messages(
     }
 }
 
+/// Run one job message (R2 event shape) end to end.
+async fn handle_job(
+    data: &[u8],
+    r2: &cloudflare::r2::R2,
+    video_collection: &Collection<Video>,
+    ffmpeg_log: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let event = msg_parser::parse_r2_event(serde_json::from_slice(data)?)?;
+    // the worker uploads processed/* to the same bucket; never re-process those
+    if !event.object.key.starts_with("raw/") {
+        println!("skipping {} {}", event.action, event.object.key);
+        return Ok(());
+    }
+    println!("{} {}/{}", event.action, event.bucket, event.object.key);
+    runner_r2(r2, &event.bucket, &event.object.key, video_collection, ffmpeg_log).await
+}
+
+/// CloudAMQP consumer. Acks after the transcode finishes, so a crash mid-job redelivers it.
+// ponytail: one retry via `redelivered`, no dead-letter queue. Add a DLX if failed jobs need inspecting.
+async fn process_amqp_jobs(
+    amqp_url: &str,
+    r2: &cloudflare::r2::R2,
+    video_collection: &Collection<Video>,
+    ffmpeg_log: bool,
+) {
+    use futures_lite::StreamExt;
+    use lapin::options::{BasicAckOptions, BasicNackOptions};
+
+    loop {
+        let (_conn, mut consumer) = match amqp::consume(amqp_url).await {
+            Ok(c) => c,
+            Err(e) => {
+                println!("AMQP connect error: {}", e);
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                continue;
+            }
+        };
+        println!("listening for jobs on AMQP queue {}", amqp::QUEUE);
+
+        while let Some(delivery) = consumer.next().await {
+            let delivery = match delivery {
+                Ok(d) => d,
+                Err(e) => {
+                    println!("AMQP delivery error: {}", e);
+                    break;
+                }
+            };
+
+            let settled = match handle_job(&delivery.data, r2, video_collection, ffmpeg_log).await {
+                Ok(_) => {
+                    println!("Success");
+                    delivery.ack(BasicAckOptions::default()).await
+                }
+                Err(e) => {
+                    // retry once, then drop (the video is already marked FAILED)
+                    println!("Error (redelivered={}): {}", delivery.redelivered, e);
+                    delivery
+                        .nack(BasicNackOptions { requeue: !delivery.redelivered, ..Default::default() })
+                        .await
+                }
+            };
+            if let Err(e) = settled {
+                println!("AMQP ack error: {}", e);
+            }
+        }
+
+        println!("AMQP consumer stopped, reconnecting");
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
+}
+
 #[::tokio::main]
 async fn main() {
-    let (ffmpeg_log, config, queue_url) = load_env().await;
-    let sqs_client = sqs::Client::new(&config);
+    dotenv().expect("Failed to read .env file");
+    let ffmpeg_log = ffmpeg_log_enabled();
     let video_collection = mongo::get_video_collection().await.unwrap();
-    process_messages(&sqs_client, &queue_url, &video_collection, ffmpeg_log).await;
+
+    // legacy AWS:
+    // let (ffmpeg_log, config, queue_url) = load_env().await;
+    // process_messages(&sqs::Client::new(&config), &queue_url, &video_collection, ffmpeg_log).await;
+
+    let amqp_url = std::env::var("AMQP_URL").expect("AMQP_URL not set");
+    let r2 = cloudflare::r2::R2::from_env();
+    process_amqp_jobs(&amqp_url, &r2, &video_collection, ffmpeg_log).await;
 }
 
 pub struct FilePaths {
@@ -125,8 +220,9 @@ pub struct FilePaths {
     pub file_name_without_ext: String,
 }
 
-pub fn generate_paths(key: &str) -> Result<FilePaths, Box<dyn std::error::Error>> {
-    let path = Path::new(S3_MOUNT_POINT).join(key);
+/// `root` holds `raw/<id>` inputs; outputs go to `root/processed/<id>`.
+pub fn generate_paths(root: &Path, key: &str) -> Result<FilePaths, Box<dyn std::error::Error>> {
+    let path = root.join(key);
 
     if path.exists() == false {
         return Err(Box::new(std::io::Error::new(
@@ -145,7 +241,7 @@ pub fn generate_paths(key: &str) -> Result<FilePaths, Box<dyn std::error::Error>
         .ok_or("Failed to convert OsStr to string")?;
 
     // example: /home/rushikesh/s3_drive/processed/93f2b0b08fsdf8e9b0fsdf8bb
-    let output_dir = Path::new(OUTPUT_DIR).join(file_name_without_ext);
+    let output_dir = root.join("processed").join(file_name_without_ext);
     if !output_dir.exists() {
         println!("Creating output dir: {:?}", output_dir);
         std::fs::create_dir_all(&output_dir)?;
@@ -174,12 +270,14 @@ pub fn generate_paths(key: &str) -> Result<FilePaths, Box<dyn std::error::Error>
     })
 }
 
+// legacy AWS: reads and writes the s3fs mount directly
+#[allow(dead_code)]
 pub async fn runner(
     key: &str,
     video_collection: &Collection<Video>,
     ffmpeg_log: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let file_paths = generate_paths(key)?;
+    let file_paths = generate_paths(Path::new(S3_MOUNT_POINT), key)?;
 
     update_video_status(
         video_collection,
@@ -198,6 +296,42 @@ pub async fn runner(
     .await?;
 
     Ok(())
+}
+
+/// Download `key` from R2, transcode locally, upload outputs to `processed/<id>/`.
+pub async fn runner_r2(
+    r2: &cloudflare::r2::R2,
+    bucket: &str,
+    key: &str,
+    video_collection: &Collection<Video>,
+    ffmpeg_log: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let id = Path::new(key)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or("Failed to get file stem")?;
+    let job_root = work_dir().join(id);
+    // clear leftovers from a crashed attempt; generate_paths refuses an existing output dir
+    let _ = std::fs::remove_dir_all(&job_root);
+
+    let result = async {
+        r2.download(bucket, key, &job_root.join(key)).await?;
+        let file_paths = generate_paths(&job_root, key)?;
+
+        update_video_status(video_collection, id, mongo::models::VideoStatus::PROCESSING).await?;
+        transcoder(&file_paths, ffmpeg_log)?;
+        r2.upload_dir(bucket, Path::new(&file_paths.output_dir), &format!("processed/{}", id))
+            .await?;
+        update_video_status(video_collection, id, mongo::models::VideoStatus::READY).await?;
+        Ok::<(), Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    let _ = std::fs::remove_dir_all(&job_root);
+    if result.is_err() {
+        let _ = update_video_status(video_collection, id, mongo::models::VideoStatus::FAILED).await;
+    }
+    result
 }
 
 pub fn transcoder(
@@ -219,8 +353,7 @@ pub fn transcoder(
         res_idx,
     );
 
-    // ! need to be called
-    builder::run_ffmpeg(command, ffmpeg_log);
+    builder::run_ffmpeg(command, ffmpeg_log)?;
 
 
     // thumbnail generation
@@ -231,8 +364,7 @@ pub fn transcoder(
     );
 
 
-    // ! need to be called
-    builder::run_ffmpeg(command, ffmpeg_log);
+    builder::run_ffmpeg(command, ffmpeg_log)?;
 
     Ok(())
 }
