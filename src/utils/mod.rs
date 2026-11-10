@@ -1,6 +1,7 @@
 pub mod builder;
 pub mod verify;
 pub mod thumb_gen_builder;
+pub mod sprite;
 
 #[derive(Debug)]
 /// The `StreamInfo` struct contains information about a video stream, including whether it has video

@@ -76,6 +76,7 @@ fn content_type(path: &Path) -> &'static str {
         Some("m3u8") => "application/vnd.apple.mpegurl",
         Some("ts") => "video/mp2t",
         Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("vtt") => "text/vtt",
         _ => "application/octet-stream",
     }
 }

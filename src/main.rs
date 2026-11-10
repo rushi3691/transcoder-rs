@@ -10,7 +10,7 @@ use dotenv::dotenv;
 
 use mongo::models::Video;
 use mongodb::Collection;
-use utils::{builder, verify, thumb_gen_builder};
+use utils::{builder, verify, thumb_gen_builder, sprite};
 use aws_sdk_sqs as sqs;
 use mongo::helpers::update_video_status;
 
@@ -365,6 +365,16 @@ pub fn transcoder(
 
 
     builder::run_ffmpeg(command, ffmpeg_log)?;
+
+    // seek-bar preview sprite + its WebVTT index
+    if let Some(plan) = sprite::plan(&stream_info) {
+        let command = sprite::build_sprite_cmd(&file_paths.input_file, &file_paths.output_dir, &plan);
+        builder::run_ffmpeg(command, ffmpeg_log)?;
+        std::fs::write(
+            Path::new(&file_paths.output_dir).join(sprite::VTT_FILE),
+            sprite::build_vtt(&plan, stream_info.duration),
+        )?;
+    }
 
     Ok(())
 }
